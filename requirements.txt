@@ -7,3 +7,5 @@ aioipfs
 cryptography
 eth-account
 python-dotenv
+aiohttp
+requests

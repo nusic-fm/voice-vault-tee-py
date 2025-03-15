@@ -6,19 +6,27 @@ from eth_account.messages import encode_defunct
 from cryptography.fernet import Fernet
 import base64
 from fastapi.responses import FileResponse, Response
-import aioipfs
 import requests
 import time
 from dotenv import load_dotenv
 import aiohttp
-
+from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 app = FastAPI()
 
+# Add CORS middleware configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 async def root():
-    return {"message": "The World! Call /derivekey or /tdxquote", "env": os.getenv('PINATA_GATEWAY_URL')}
+    return {"message": "The World! Call /derivekey or /tdxquote"}
 
 async def verify_signature_and_derive_key(signature: str, message: str, address: str):
     message_hash = encode_defunct(text=message)
@@ -41,13 +49,18 @@ async def upload_encrypted_audio(
     message: str = Form(...),
     address: str = Form(...)
 ):
-    encryption_key = await verify_signature_and_derive_key(signature, message, address)
     try:
+        try:
+            encryption_key = await verify_signature_and_derive_key(signature, message, address)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
         if not encryption_key:
             raise HTTPException(status_code=400, detail="Encryption key is required")
-
         # Read the audio file
-        content = await file.read()
+        try:
+            content = await file.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="File is required")
         
         # Create Fernet cipher for encryption
         fernet = Fernet(base64.b64encode(bytes.fromhex(encryption_key)))
@@ -71,17 +84,33 @@ async def upload_encrypted_audio(
             'Authorization': f'Bearer {os.getenv("PINATA_JWT_SECRET")}'
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.pinata.cloud/pinning/pinFileToIPFS",
-                data=form_data,
-                headers=headers
-            ) as response:
-                response_data = await response.json()
-                print(response_data)
-                cid = response_data['IpfsHash']
-
-        return {"cid": cid}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+                    data=form_data,
+                    headers=headers,
+                    timeout=30  # Add timeout
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise HTTPException(
+                            status_code=response.status,
+                            detail=f"Pinata API error: {error_text}"
+                        )
+                    response_data = await response.json()
+                    cid = response_data.get('IpfsHash')
+                    if not cid:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="No IPFS hash returned from Pinata"
+                        )
+                    return {"cid": cid}
+        except aiohttp.ClientError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Network error while connecting to Pinata: {str(e)}"
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
