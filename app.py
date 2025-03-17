@@ -37,7 +37,7 @@ async def verify_signature_and_derive_key(signature: str, message: str, address:
 
     # Derive key using the verified address
     client = AsyncTappdClient()
-    derive_key = await client.derive_key('/', address)
+    derive_key = await client.derive_key(address)
     key_bytes = derive_key.toBytes(32)  # Get 32 bytes for encryption key
 
     return key_bytes.hex()
